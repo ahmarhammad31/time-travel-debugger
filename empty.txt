@@ -1,2 +1,2 @@
-setup for project
+setup for project, i have also go through the document
 created a main.cpp
