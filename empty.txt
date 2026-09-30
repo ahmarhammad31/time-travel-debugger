@@ -1,1 +1,2 @@
 setup for project
+created a main.cpp

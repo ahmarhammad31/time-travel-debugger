@@ -68,3 +68,7 @@ vcpkg_installed/
 Testing/
 .cache/
 .vs/
+x64/
+Debug/
+Release/
+ipch/
