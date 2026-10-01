@@ -72,9 +72,12 @@ x64/
 Debug/
 Release/
 ipch/
-*.vcxproj.filters
-*.vcxproj.user
 *.suo
 *.user
 *.aps
 *.nc
+*.slnx
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
