@@ -12,8 +12,8 @@
 #include <string>
 #include <cstdint>
 #include <fstream>
-//#include<unistd.h>
-//#include<sys/socket.h>
+#include<unistd.h>
+#include<sys/socket.h>
 #include <cstdint>
 #include <cstdio>
 using namespace std;
@@ -89,7 +89,13 @@ public:
         // copies every frame, top to bottom in the array given as a parameter
         // this is what buildSnapshot() call, returns count written
         Node* temp = top;
-        
+        int32_t ct=0;
+        while(temp!=nullptr&&ct<maxLen){
+            out[ct]=temp->data;
+            ct++;
+            temp=temp->next;
+        }
+        return ct;
     }
 };
 
@@ -176,7 +182,10 @@ struct PendingPatch
 // PASS 0x0: READING source.bin + VALIDITY CHECK
 bool readSourceLine(ifstream& in, string& out)
 {
-    // reads the next nonblank line
+   
+    while(getline(in,out)){
+        
+    }
 }
 string firstWord(const string& line)
 {
