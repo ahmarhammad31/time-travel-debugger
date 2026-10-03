@@ -182,10 +182,7 @@ struct PendingPatch
 // PASS 0x0: READING source.bin + VALIDITY CHECK
 bool readSourceLine(ifstream& in, string& out)
 {
-   
-    while(getline(in,out)){
-        
-    }
+    // reads the next nonblank line
 }
 string firstWord(const string& line)
 {
