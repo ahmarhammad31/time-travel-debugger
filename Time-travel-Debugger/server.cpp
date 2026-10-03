@@ -183,6 +183,7 @@ struct PendingPatch
 bool readSourceLine(ifstream& in, string& out)
 {
     // reads the next nonblank line
+    //hi
 }
 string firstWord(const string& line)
 {
