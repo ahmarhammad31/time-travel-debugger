@@ -27,6 +27,23 @@ const int32_t MAX_PATCHES = MAX_FUNCS * 4;
 const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024; // sanity cap on the declared file length
 const int32_t IO_BUFFER_SIZE = 64 * 1024;                  // fixed buffer for streaming to/from disk
 const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
+const int32_t MAX_STEPS = 10000;
+
+//ERROR REPORT
+string gError;
+void sendError(const string& msg){
+    cout<<"Error: "<<msg<<endl;
+}
+//helpers
+static string lowerStr(string s){
+    for(size_t i = 0;i<s.size();i++){
+        s[i]=(char)tolower((unsigned char)s[i]);
+    }
+    return s;
+}
+static int32_t toInt(const string& s){
+    return (int32_t)strtoll(s.c_str(),nullptr,10);
+}
 
 // ---- Custom data structures
 
