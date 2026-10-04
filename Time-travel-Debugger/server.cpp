@@ -31,19 +31,44 @@ const int32_t MAX_STEPS = 10000;
 
 //ERROR REPORT
 string gError;
-void sendError(const string& msg){
-    cout<<"Error: "<<msg<<endl;
+void sendError(const string& msg) {
+    cout << "Error: " << msg << endl;
 }
 //helpers
-static string lowerStr(string s){
-    for(size_t i = 0;i<s.size();i++){
-        s[i]=(char)tolower((unsigned char)s[i]);
+static string lowerStr(string s) {
+    for (size_t i = 0;i < s.size();i++) {
+        s[i] = (char)tolower((unsigned char)s[i]);
     }
     return s;
 }
-static int32_t toInt(const string& s){
-    return (int32_t)strtoll(s.c_str(),nullptr,10);
+static string wordAt(const string& line, int32_t index) {
+    size_t i = 0, n = line.size();
+    int32_t curr = 0;
+    while (i < n) {
+        while (i < n && isspace((unsigned char)line[i]))i++;
+        if (i >= n)break;
+        size_t s = i;
+		while (i < n && !isspace((unsigned char)line[i]))i++;
+        if (curr == index) {
+            return line.substr(s, i - s);
+        }
+        curr++;
+    }
+    return "";
 }
+static bool isNumber(const string& s) {
+	if (s.empty())return false;
+	size_t i = 0;
+	if (s[0] == '-' || s[0] == '+')i++;
+	for (; i < s.size();i++) {
+		if (!isdigit((unsigned char)s[i]))return false;
+	}
+	return true;
+}
+static int32_t toInt(const string& s) {
+    return (int32_t)strtoll(s.c_str(), nullptr, 10);
+}
+
 
 // ---- Custom data structures
 
@@ -62,35 +87,36 @@ class Stack
 public:
     // Implement these functions:
     Stack()
-    { 
-		top = nullptr;
+    {
+        top = nullptr;
         count = 0;
     }
+
     void push(const T& val)
     {
         if (count >= MAX_STACK_DEPTH)return;
         // pushes the value on the stack if max limit is not reached yet.
         Node* n = new Node();
-		n->data = val;
-		top = n;
+        n->data = val;
+        top = n;
         count++;
-	
+
     }
     T pop()
     {
         // pop the top value on the stack
-		if (isEmpty()) return T(); 
-		Node* temp = top;
-		T val = temp->data;
+        if (isEmpty()) return T();
+        Node* temp = top;
+        T val = temp->data;
         top = top->next;
         delete temp;
         count--;
-		return val;
+        return val;
     }
     T& peek()
     {
         // returns the top value on the stack
-		if (isEmpty()) throw underflow_error("Stack is empty");
+        if (isEmpty()) throw underflow_error("Stack is empty");
         return top->data;
     }
     bool isEmpty()
@@ -106,11 +132,11 @@ public:
         // copies every frame, top to bottom in the array given as a parameter
         // this is what buildSnapshot() call, returns count written
         Node* temp = top;
-        int32_t ct=0;
-        while(temp!=nullptr&&ct<maxLen){
-            out[ct]=temp->data;
+        int32_t ct = 0;
+        while (temp != nullptr && ct < maxLen) {
+            out[ct] = temp->data;
             ct++;
-            temp=temp->next;
+            temp = temp->next;
         }
         return ct;
     }
@@ -134,16 +160,30 @@ public:
     // Implement these functions
     Timeline()
     {
+		head = nullptr;
+        tail = nullptr;
+		stepCount = 0;
     }
     void record(Snapshot* s)
     {
+		TimelineNode* n = new TimelineNode();
+        n->data = s;
+		n->next = nullptr;
+		n->prev = tail;
+        if (tail != nullptr)tail->next = n;
+        else head = n;
+        tail = n;
+        stepCount++;
         // add record in the timeline
     }
     TimelineNode* begin()
     {
+		return head;
+
     }
     int32_t getStepCount()
     {
+		return stepCount;
     }
 };
 
@@ -165,7 +205,7 @@ struct Frame
 struct Snapshot
 {
     Frame callStack[MAX_STACK_DEPTH];
-    int32_t stackDepth;
+    int32_t stackDepth = 0;
 };
 struct TTDBHeader
 {
@@ -178,6 +218,8 @@ void writeHeader(FILE* f, const TTDBHeader& h)
 {
     fwrite(h.magic, 1, 4, f);
     fwrite(&h.version, sizeof(int32_t), 1, f);
+	fwrite(&h.stepCount, sizeof(int32_t), 1, f);
+	fwrite(&h.indexOffset, sizeof(int64_t), 1, f);
 
     // placeholder for other two data members
 }
@@ -202,54 +244,54 @@ bool readSourceLine(ifstream& in, string& out)
     // reads the next nonblank line
     string line;
     char ch;
-    while(true){
+    while (true) {
         line.clear();
-        bool chk=false;
-        while(in.get(ch)){
-            chk=true;
-            if(ch=='\n')break;
-            line.push_back(ch); 
+        bool chk = false;
+        while (in.get(ch)) {
+            chk = true;
+            if (ch == '\n')break;
+            line.push_back(ch);
         }
-        if(!chk)return false;
-        if(line.size() >= 3 && (unsigned char)line[0]== 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2]==0xBF){
-            line.erase(0,3);
+        if (!chk)return false;
+        if (line.size() >= 3 && (unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF) {
+            line.erase(0, 3);
         }
-        size_t s=0,e=line.size();
-        while(s<e && isspace((unsigned char)line[s])) s++;
-        while(e<s && isspace((unsigned char)line[e-1]))e--;
-        line=line.substr(s,e-s);
-        if(line.empty())continue;
-        if(line.compare(0,2,"//")==0)continue;
-        out=line;
+        size_t s = 0, e = line.size();
+        while (s < e && isspace((unsigned char)line[s])) s++;
+        while (e < s && isspace((unsigned char)line[e - 1]))e--;
+        line = line.substr(s, e - s);
+        if (line.empty())continue;
+        if (line.compare(0, 2, "//") == 0)continue;
+        out = line;
         return true;
     }
 }
 string firstWord(const string& line)
 {
     // returns first word from the input string
-    return wordAt(line,0);
+    return wordAt(line, 0);
 }
 string secondWord(const string& line)
 {
     // returns the second word
-    return wordAt(line,1);
+    return wordAt(line, 1);
 }
 bool validateProgram(const char* sourcePath)
 {
     // for each func defined there should be exactly one func_end and no nested funcs allowed - 
-    ifstream in(sourcePath,ios::binary);
-    if(!in){
-        gError=string("cannot open")+sourcePath;
+    ifstream in(sourcePath, ios::binary);
+    if (!in) {
+        gError = string("cannot open") + sourcePath;
         return false;
     }
-    in.seekg(0,ios::end);
-    uint64_t size= (uint64_t)in.tellg();
-    in.seekg(0,ios::beg);
-    if(size>MAX_SOURCE_BYTES){
-        gError="source file exceeds the maximum allowed limit";
+    in.seekg(0, ios::end);
+    uint64_t size = (uint64_t)in.tellg();
+    in.seekg(0, ios::beg);
+    if (size > MAX_SOURCE_BYTES) {
+        gError = "source file exceeds the maximum allowed limit";
         return false;
     }
-    
+
 }
 
 // PASS 0x1: RESOLVE() -> resolve.bin
