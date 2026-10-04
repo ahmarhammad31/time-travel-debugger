@@ -299,25 +299,113 @@ int64_t writeResolveRecord(FILE* f, int64_t offsetField, const string& text)
 {
     // writes one [offset(8B)][size(4B)][string] record at the current file position
     // returns this record's own starting byte position
+
+    int64_t st = (int64_t)ftello(f);
+	int32_t size = (int32_t)text.size();
+	fwrite(&offsetField, sizeof(int64_t), 1, f);
+	fwrite(&size, sizeof(int32_t), 1, f);
+	if (size > 0)fwrite(text.data(), 1, (size_t)size, f);
+    return st;
 }
 int64_t readResolveRecord(FILE* f, string& outText)
 {
     // reads one record at the current position and advances past it, returns the offset field - the raw line text comes back untouched in outText.
+	int64_t offsetField;
+	int32_t size;
+	if (fread(&offsetField, sizeof(int64_t), 1, f) != 1)return -1;
+	if (fread(&size, sizeof(int32_t), 1, f) != 1)return -1;
+	outText.resize((size_t)size);
+	if (size > 0 && fread(&outText[0], 1, (size_t)size, f) != (size_t)size)return -1;
+    return offsetField;
 }
 int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
 {
     FuncEntry funcArray[MAX_FUNCS];
-    int32_t funcCount = 0;
+    int32_t funcCt = 0;
     PendingPatch patches[MAX_PATCHES];
-    int32_t patchCount = 0;
-    // Every source line becomes one record holding the raw line, as-is.
-    // resolve() only PEEKS at the leading word(s) -- enough to spot FUNC
-    // (remember its position) and CALL (remember which function it needs
-    // and where its offset field sits).
-    // Once the whole file is written, every CALL's offset field is patched
-    // with its target's position. Patching happens after the full write
-    // Returns the byte offset of main's FUNC header record.
-    // if there is no main return the error 
+    int32_t patchCt = 0;
+	ifstream fin(sourcePath, ios::binary);
+    if (!fin) {
+		gError = string("cannot open ") + sourcePath;
+		return -1;
+    }
+	FILE* fout = fopen(resolveBinPath, "wb");
+    if (!fout) {
+		gError = string("cannot open ") + resolveBinPath;
+		return -1;
+    }
+	setvbuf(fout, nullptr, _IOFBF, IO_BUFFER_SIZE);
+    string line;
+	int64_t pos = 0;
+    while (readSourceLine(fin, line)) {
+		string s = lowerStr(firstWord(line));
+		int64_t offsetField = pos;
+        if (s == "func") {
+			string name = secondWord(line);
+			if (funcCt >= MAX_FUNCS) {
+				gError = "too many functions";
+				fclose(fout);
+				return -1;
+			}
+            for (int32_t i = 0;i < funcCt;i++) {
+                if(funcArray[i].funcName == name) {
+                    gError = "function '" + name + "' is already defined";
+                    fclose(fout);
+                    return -1;
+                }
+            }
+        }
+        else if(s=="call"){
+			if (patchCt >= MAX_PATCHES) {
+				gError = "too many call patches";
+				fclose(fout);
+				return -1;
+			}
+			patches[patchCt].byteOffsetOfOffsetField = pos;
+			patches[patchCt].targetFuncName = secondWord(line);
+            patchCt++;
+			offsetField = 0; 
+        }
+        writeResolveRecord(fout, offsetField, line);
+		pos += 8 + 4 + (int64_t)line.size();
+    }
+    fin.close();
+    for (int32_t i = 0;i < patchCt;i++) {
+        int64_t tar = -1;
+        for (int32_t j = 0;j < funcCt;j++) {
+			if (funcArray[j].funcName == patches[i].targetFuncName]) {
+				tar = funcArray[j].byteOffsetInResolveBin;
+				break;
+			}
+
+        }
+        if (tar < 0) {
+			gError = "call to undefined function '" + patches[i].targetFuncName + "'";
+			fclose(fout);
+			return -1;
+        }
+		fseeko(fout, (off_t)patches[i].byteOffsetOfOffsetField, SEEK_SET);
+		fwrite(&tar, sizeof(int64_t), 1, fout);
+
+    }
+    fflush(fout);
+	int64_t mainOffset = -1;
+    for (int32_t j = 0;j < funcCt;j++) {
+		if (funcArray[j].funcName == "main") {
+			mainOffset = funcArray[j].byteOffsetInResolveBin;
+			break;
+		}
+    }
+    if (ferror(fout)) {
+        gError = "failed while wrting resolve.bin";
+		fclose(fout);
+        return -1;
+    }
+    fclose(fout);
+    if (mainOffset < 0) {
+        gError = "no 'main' function defined";
+    }
+    return mainOffset;
 }
 
 // PASS 0x2: EXECUTION (tokenization happens here)
