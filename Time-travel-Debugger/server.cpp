@@ -220,6 +220,19 @@ string secondWord(const string& line)
 bool validateProgram(const char* sourcePath)
 {
     // for each func defined there should be exactly one func_end and no nested funcs allowed - 
+    ifstream in(sourcePath,ios::binary);
+    if(!in){
+        gError=string("cannot open")+sourcePath;
+        return false;
+    }
+    in.seekg(0,ios::end);
+    uint64_t size= (uint64_t)in.tellg();
+    in.seekg(0,ios::beg);
+    if(size>MAX_SOURCE_BYTES){
+        gError="source file exceeds the maximum allowed limit";
+        return false;
+    }
+    
 }
 
 // PASS 0x1: RESOLVE() -> resolve.bin
