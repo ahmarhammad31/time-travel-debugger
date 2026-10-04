@@ -183,15 +183,39 @@ struct PendingPatch
 bool readSourceLine(ifstream& in, string& out)
 {
     // reads the next nonblank line
-    //hi
+    string line;
+    char ch;
+    while(true){
+        line.clear();
+        bool chk=false;
+        while(in.get(ch)){
+            chk=true;
+            if(ch=='\n')break;
+            line.push_back(ch); 
+        }
+        if(!chk)return false;
+        if(line.size() >= 3 && (unsigned char)line[0]== 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2]==0xBF){
+            line.erase(0,3);
+        }
+        size_t s=0,e=line.size();
+        while(s<e && isspace((unsigned char)line[s])) s++;
+        while(e<s && isspace((unsigned char)line[e-1]))e--;
+        line=line.substr(s,e-s);
+        if(line.empty())continue;
+        if(line.compare(0,2,"//")==0)continue;
+        out=line;
+        return true;
+    }
 }
 string firstWord(const string& line)
 {
     // returns first word from the input string
+    return wordAt(line,0);
 }
 string secondWord(const string& line)
 {
     // returns the second word
+    return wordAt(line,1);
 }
 bool validateProgram(const char* sourcePath)
 {
