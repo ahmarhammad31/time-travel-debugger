@@ -758,6 +758,7 @@ int32_t main()
         sendError(gError);
         return 1;
     }
+
     writeTdbg(timeline, "session.tdbg");
     if (!gError.empty()) 
     {
