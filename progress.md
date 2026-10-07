@@ -6,3 +6,4 @@ oct 4: Try to implement all function
 implemented till pass 0x0.
 now implemented pass 0x1.
 tried to implement pass 0x2, implemented a bit 
+implemented the whole till pass 0x2.

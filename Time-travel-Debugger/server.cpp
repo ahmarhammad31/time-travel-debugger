@@ -467,6 +467,45 @@ Snapshot* buildSnapshot(Stack<Frame>& callStack)
 	s->stackDepth = callStack.snapshot_into(s->callStack,MAX_STACK_DEPTH);
     return s;
 }
+//helpr func
+Variable* findVar(Frame& fr, const string& name)
+{
+    for (int32_t i = 0; i < fr.argc; i++)
+        if (fr.argv[i].name == name) return &fr.argv[i];
+    for (int32_t i = 0; i < fr.localCount; i++)
+        if (fr.locals[i].name == name) return &fr.locals[i];
+    return nullptr;
+}
+int32_t valueOf(Frame& fr, const string& tok)
+{
+    if (isNumber(tok)) return toInt(tok);
+    Variable* v = findVar(fr, tok);
+    return v ? v->value : 0;
+}
+Frame makeFr(Token tokens[], int32_t n, int32_t returnLine) {
+    Frame fr;
+	fr.func_name = n > 1 ? tokens[1].text : "";
+    int32_t param = n - 2;
+    if (param < 0)param = 0;
+	if (param > MAX_VARS_PER_FRAME)param = MAX_VARS_PER_FRAME;
+    fr.argc = param;
+    for (int32_t i = 0;i < param;i++) {
+		fr.argv[i].name = tokens[i + 2].text;
+		fr.argv[i].value = 0; 
+    }
+	fr.returnLine = returnLine;
+    fr.localCount = 0;
+	return fr;
+}
+Variable* getOrCreateVar(Frame& fr, const string& name)
+{
+    Variable* v = findVar(fr, name);
+    if (v) return v;
+    if (fr.localCount >= MAX_VARS_PER_FRAME) return nullptr;
+    fr.locals[fr.localCount].name = name;
+    fr.locals[fr.localCount].value = 0;
+    return &fr.locals[fr.localCount++];
+}
 void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& timeline)
 {
     // initialize the call stack
@@ -475,6 +514,123 @@ void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& ti
 
     // implementation:
     // execute line by line, and according to the keyword perform action
+	FILE* f = fopen(resolveBinPath, "rb");
+    if (!f)
+    {
+		gError = string("cannot open ") + resolveBinPath;
+        return;
+    }
+
+	setvbuf(f, nullptr, _IOFBF, IO_BUFFER_SIZE);
+	Stack<Frame> callStack;
+	string callArgNames[MAX_STACK_DEPTH][MAX_VARS_PER_FRAME];
+	Token tokens[MAX_TOKENS];
+	Token headrTokens[MAX_TOKENS];
+    string txt;
+	fseek(f, (long)mainOffset, SEEK_SET);
+    if (readResolveRecord(f, txt) < 0) {
+        gError = "damaged resolve.bin(cannot read main)";
+		fclose(f);
+        return;
+    }
+	int32_t step = 0;
+	int32_t headrNo = tokenizeLine(txt, headrTokens, MAX_TOKENS);
+    
+    callStack.push(makeFr(headrTokens, headrNo, -1));
+    while (!callStack.isEmpty()) {
+		int64_t offsetField = readResolveRecord(f, txt);
+        if (offsetField < 0) break;
+		int32_t tokenCt = tokenizeLine(txt, tokens, MAX_TOKENS);
+		if (tokenCt == 0)continue;
+		const string& x = tokens[0].text;
+        bool executed = true;
+        bool finshed = false;
+        if(x=="set"||x=="add"||x=="sub"||x=="mul"||x=="div") {
+			Frame& fr = callStack.peek();
+            int32_t right=(tokenCt >2)? valueOf(fr, tokens[2].text) : 0;
+			Variable* v = (tokenCt > 1) ? getOrCreateVar(fr, tokens[1].text) : nullptr;
+            if (v)
+            {
+                int64_t a = v->value, b = right, r = a;
+                if (x == "set") r = b;
+                else if (x == "add") r = a + b;
+                else if (x == "sub") r = a - b;
+                else if (x == "mul") r = a * b;
+                else if (x == "div") { if (b != 0) r = a / b; } // division by zero: leave unchanged
+                v->value = (int32_t)r;
+            }
+        }
+        else if (x == "call") {
+            if (callStack.depth() >= MAX_STACK_DEPTH)
+            {
+                gError = "stack overflow: call depth exceeded " + to_string(MAX_STACK_DEPTH);
+                fclose(f);
+                return;
+            }
+            Frame& fr = callStack.peek();
+            int32_t callIdx = callStack.depth();
+            int64_t resume = (int64_t)ftell(f);
+            string funcText;
+            fseek(f, (long)offsetField, SEEK_SET);
+            if (readResolveRecord(f, funcText) < 0)
+            {
+                gError = "damaged resolve.bin (bad call target)";
+                fclose(f);
+                return;
+            }
+			headrNo = tokenizeLine(funcText, headrTokens, MAX_TOKENS);
+			Frame call = makeFr(headrTokens, headrNo, (int32_t)resume);
+            int32_t argCt = tokenCt - 2;
+            for (int32_t i = 0; i < call.argc; i++)
+            {
+                if (i < argCt)
+                {
+                    call.argv[i].value = valueOf(fr, tokens[2 + i].text);
+                    callArgNames[callIdx][i] = tokens[2 + i].text;
+                }
+                else
+                {
+                    call.argv[i].value = 0;
+                    callArgNames[callIdx][i].clear();
+                }
+            }
+			callStack.push(call);
+        }
+        else if (x == "func_end") {
+            if (callStack.depth() == 1)
+            {
+                finshed = true; 
+            }
+            else
+            {
+                int32_t idx = callStack.depth() - 1;
+                Frame call = callStack.pop();
+                Frame& fr = callStack.peek();
+                for (int32_t i = 0; i < call.argc; i++)
+                {
+                    const string& nm = callArgNames[idx][i];
+                    if (nm.empty() || isNumber(nm)) continue;
+                    Variable* v = getOrCreateVar(fr, nm);
+                    if (v) v->value = call.argv[i].value;
+                }
+                fseek(f, (long)call.returnLine, SEEK_SET);
+            }
+        }
+        else {
+			executed = false;
+        }
+        if (executed) {
+            if (++step > MAX_STEPS)
+            {
+                gError = "program too long: more than " + to_string(MAX_STEPS) + " execution steps";
+                fclose(f);
+                return;
+            }
+            timeline.record(buildSnapshot(callStack));
+        }
+        if (finshed)break;
+    }
+	fclose(f);
 }
 
 // PASS 0x3: SERIALIZE TIMELINE
@@ -485,6 +641,19 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
     // placing each snapshot in the file while maintaining the index(starting point of each nth snapshot)
     // after timeline add the index array i the file
     // update the header
+	FILE* f = fopen(tdbgPath, "wb");
+    if (!f) {
+        gError = string("cannot create ") + tdbgPath;
+        return;
+    }
+    setvbuf(f, nullptr, _IOFBF, IO_BUFFER_SIZE);
+    int32_t steps = timeline.getStepCount();
+    TTDBHeader h = { {'T', 'T', 'D', 'B'}, 1, steps, 0 };
+    writeHeader(f, h);
+
+	int64_t* idx = new int64_t[steps > 0 ? steps : 1];
+    int32_t i = 0;
+ 
 }
 // main section
 int32_t main()
