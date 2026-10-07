@@ -7,6 +7,17 @@
 //   3. Pass 0X2   -- execute resolve.bin: tokenize ONE line at a time, update the call stack, take a snapshot -> Timeline
 //   4. Pass 0X3   -- serialize Timeline -> session.tdbg(header + snapshot records + dense index)
 
+#ifndef _WIN32
+#define _FILE_OFFSET_BITS 64 
+#endif
+
+#ifndef _WIN32
+#define fseek64(f, off, whence) _fseeki64((f),(__int64)(off),(whence))
+#define ftell64(f) ((int64_t)_ftelli64(f))
+#else
+#define fseek64(f,off,whence) fseeko((f),(off_t)(off),(whence))
+#define ftell64(f) ((int64_t)ftello(f))
+#endif
 
 #include <iostream>
 #include <string>
@@ -27,6 +38,48 @@ const int32_t MAX_PATCHES = MAX_FUNCS * 4;
 const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024; // sanity cap on the declared file length
 const int32_t IO_BUFFER_SIZE = 64 * 1024;                  // fixed buffer for streaming to/from disk
 const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
+const int32_t MAX_STEPS = 10000;
+
+//ERROR REPORT
+string gError;
+void sendError(const string& msg) {
+    cout << "Error: " << msg << endl;
+}
+//helpers
+static string lowerStr(string s) {
+    for (size_t i = 0;i < s.size();i++) {
+        s[i] = (char)tolower((unsigned char)s[i]);
+    }
+    return s;
+}
+static string wordAt(const string& line, int32_t index) {
+    size_t i = 0, n = line.size();
+    int32_t curr = 0;
+    while (i < n) {
+        while (i < n && isspace((unsigned char)line[i]))i++;
+        if (i >= n)break;
+        size_t s = i;
+		while (i < n && !isspace((unsigned char)line[i]))i++;
+        if (curr == index) {
+            return line.substr(s, i - s);
+        }
+        curr++;
+    }
+    return "";
+}
+static bool isNumber(const string& s) {
+	if (s.empty())return false;
+	size_t i = 0;
+	if (s[0] == '-' || s[0] == '+')i++;
+	for (; i < s.size();i++) {
+		if (!isdigit((unsigned char)s[i]))return false;
+	}
+	return true;
+}
+static int32_t toInt(const string& s) {
+    return (int32_t)strtoll(s.c_str(), nullptr, 10);
+}
+
 
 // ---- Custom data structures
 
@@ -45,35 +98,36 @@ class Stack
 public:
     // Implement these functions:
     Stack()
-    { 
-		top = nullptr;
+    {
+        top = nullptr;
         count = 0;
     }
+
     void push(const T& val)
     {
         if (count >= MAX_STACK_DEPTH)return;
         // pushes the value on the stack if max limit is not reached yet.
         Node* n = new Node();
-		n->data = val;
-		top = n;
+        n->data = val;
+        top = n;
         count++;
-	
+
     }
     T pop()
     {
         // pop the top value on the stack
-		if (isEmpty()) return T(); 
-		Node* temp = top;
-		T val = temp->data;
+        if (isEmpty()) return T();
+        Node* temp = top;
+        T val = temp->data;
         top = top->next;
         delete temp;
         count--;
-		return val;
+        return val;
     }
     T& peek()
     {
         // returns the top value on the stack
-		if (isEmpty()) throw underflow_error("Stack is empty");
+        if (isEmpty()) throw underflow_error("Stack is empty");
         return top->data;
     }
     bool isEmpty()
@@ -89,11 +143,11 @@ public:
         // copies every frame, top to bottom in the array given as a parameter
         // this is what buildSnapshot() call, returns count written
         Node* temp = top;
-        int32_t ct=0;
-        while(temp!=nullptr&&ct<maxLen){
-            out[ct]=temp->data;
+        int32_t ct = 0;
+        while (temp != nullptr && ct < maxLen) {
+            out[ct] = temp->data;
             ct++;
-            temp=temp->next;
+            temp = temp->next;
         }
         return ct;
     }
@@ -117,16 +171,30 @@ public:
     // Implement these functions
     Timeline()
     {
+		head = nullptr;
+        tail = nullptr;
+		stepCount = 0;
     }
     void record(Snapshot* s)
     {
+		TimelineNode* n = new TimelineNode();
+        n->data = s;
+		n->next = nullptr;
+		n->prev = tail;
+        if (tail != nullptr)tail->next = n;
+        else head = n;
+        tail = n;
+        stepCount++;
         // add record in the timeline
     }
     TimelineNode* begin()
     {
+		return head;
+
     }
     int32_t getStepCount()
     {
+		return stepCount;
     }
 };
 
@@ -148,7 +216,7 @@ struct Frame
 struct Snapshot
 {
     Frame callStack[MAX_STACK_DEPTH];
-    int32_t stackDepth;
+    int32_t stackDepth = 0;
 };
 struct TTDBHeader
 {
@@ -161,6 +229,8 @@ void writeHeader(FILE* f, const TTDBHeader& h)
 {
     fwrite(h.magic, 1, 4, f);
     fwrite(&h.version, sizeof(int32_t), 1, f);
+	fwrite(&h.stepCount, sizeof(int32_t), 1, f);
+	fwrite(&h.indexOffset, sizeof(int64_t), 1, f);
 
     // placeholder for other two data members
 }
@@ -185,54 +255,54 @@ bool readSourceLine(ifstream& in, string& out)
     // reads the next nonblank line
     string line;
     char ch;
-    while(true){
+    while (true) {
         line.clear();
-        bool chk=false;
-        while(in.get(ch)){
-            chk=true;
-            if(ch=='\n')break;
-            line.push_back(ch); 
+        bool chk = false;
+        while (in.get(ch)) {
+            chk = true;
+            if (ch == '\n')break;
+            line.push_back(ch);
         }
-        if(!chk)return false;
-        if(line.size() >= 3 && (unsigned char)line[0]== 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2]==0xBF){
-            line.erase(0,3);
+        if (!chk)return false;
+        if (line.size() >= 3 && (unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF) {
+            line.erase(0, 3);
         }
-        size_t s=0,e=line.size();
-        while(s<e && isspace((unsigned char)line[s])) s++;
-        while(e<s && isspace((unsigned char)line[e-1]))e--;
-        line=line.substr(s,e-s);
-        if(line.empty())continue;
-        if(line.compare(0,2,"//")==0)continue;
-        out=line;
+        size_t s = 0, e = line.size();
+        while (s < e && isspace((unsigned char)line[s])) s++;
+        while (e < s && isspace((unsigned char)line[e - 1]))e--;
+        line = line.substr(s, e - s);
+        if (line.empty())continue;
+        if (line.compare(0, 2, "//") == 0)continue;
+        out = line;
         return true;
     }
 }
 string firstWord(const string& line)
 {
     // returns first word from the input string
-    return wordAt(line,0);
+    return wordAt(line, 0);
 }
 string secondWord(const string& line)
 {
     // returns the second word
-    return wordAt(line,1);
+    return wordAt(line, 1);
 }
 bool validateProgram(const char* sourcePath)
 {
     // for each func defined there should be exactly one func_end and no nested funcs allowed - 
-    ifstream in(sourcePath,ios::binary);
-    if(!in){
-        gError=string("cannot open")+sourcePath;
+    ifstream in(sourcePath, ios::binary);
+    if (!in) {
+        gError = string("cannot open") + sourcePath;
         return false;
     }
-    in.seekg(0,ios::end);
-    uint64_t size= (uint64_t)in.tellg();
-    in.seekg(0,ios::beg);
-    if(size>MAX_SOURCE_BYTES){
-        gError="source file exceeds the maximum allowed limit";
+    in.seekg(0, ios::end);
+    uint64_t size = (uint64_t)in.tellg();
+    in.seekg(0, ios::beg);
+    if (size > MAX_SOURCE_BYTES) {
+        gError = "source file exceeds the maximum allowed limit";
         return false;
     }
-    
+
 }
 
 // PASS 0x1: RESOLVE() -> resolve.bin
@@ -240,25 +310,113 @@ int64_t writeResolveRecord(FILE* f, int64_t offsetField, const string& text)
 {
     // writes one [offset(8B)][size(4B)][string] record at the current file position
     // returns this record's own starting byte position
+
+    int64_t st = (int64_t)ftell(f);
+	int32_t size = (int32_t)text.size();
+	fwrite(&offsetField, sizeof(int64_t), 1, f);
+	fwrite(&size, sizeof(int32_t), 1, f);
+	if (size > 0)fwrite(text.data(), 1, (size_t)size, f);
+    return st;
 }
 int64_t readResolveRecord(FILE* f, string& outText)
 {
     // reads one record at the current position and advances past it, returns the offset field - the raw line text comes back untouched in outText.
+	int64_t offsetField;
+	int32_t size;
+	if (fread(&offsetField, sizeof(int64_t), 1, f) != 1)return -1;
+	if (fread(&size, sizeof(int32_t), 1, f) != 1)return -1;
+	outText.resize((size_t)size);
+	if (size > 0 && fread(&outText[0], 1, (size_t)size, f) != (size_t)size)return -1;
+    return offsetField;
 }
 int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
 {
     FuncEntry funcArray[MAX_FUNCS];
-    int32_t funcCount = 0;
+    int32_t funcCt = 0;
     PendingPatch patches[MAX_PATCHES];
-    int32_t patchCount = 0;
-    // Every source line becomes one record holding the raw line, as-is.
-    // resolve() only PEEKS at the leading word(s) -- enough to spot FUNC
-    // (remember its position) and CALL (remember which function it needs
-    // and where its offset field sits).
-    // Once the whole file is written, every CALL's offset field is patched
-    // with its target's position. Patching happens after the full write
-    // Returns the byte offset of main's FUNC header record.
-    // if there is no main return the error 
+    int32_t patchCt = 0;
+	ifstream fin(sourcePath, ios::binary);
+    if (!fin) {
+		gError = string("cannot open ") + sourcePath;
+		return -1;
+    }
+	FILE* fout = fopen(resolveBinPath, "wb");
+    if (!fout) {
+		gError = string("cannot open ") + resolveBinPath;
+		return -1;
+    }
+	setvbuf(fout, nullptr, _IOFBF, IO_BUFFER_SIZE);
+    string line;
+	int64_t pos = 0;
+    while (readSourceLine(fin, line)) {
+		string s = lowerStr(firstWord(line));
+		int64_t offsetField = pos;
+        if (s == "func") {
+			string name = secondWord(line);
+			if (funcCt >= MAX_FUNCS) {
+				gError = "too many functions";
+				fclose(fout);
+				return -1;
+			}
+            for (int32_t i = 0;i < funcCt;i++) {
+                if(funcArray[i].funcName == name) {
+                    gError = "function '" + name + "' is already defined";
+                    fclose(fout);
+                    return -1;
+                }
+            }
+        }
+        else if(s=="call"){
+			if (patchCt >= MAX_PATCHES) {
+				gError = "too many call patches";
+				fclose(fout);
+				return -1;
+			}
+			patches[patchCt].byteOffsetOfOffsetField = pos;
+			patches[patchCt].targetFuncName = secondWord(line);
+            patchCt++;
+			offsetField = 0; 
+        }
+        writeResolveRecord(fout, offsetField, line);
+		pos += 8 + 4 + (int64_t)line.size();
+    }
+    fin.close();
+    for (int32_t i = 0;i < patchCt;i++) {
+        int64_t tar = -1;
+        for (int32_t j = 0;j < funcCt;j++) {
+			if (funcArray[j].funcName == patches[i].targetFuncName]) {
+				tar = funcArray[j].byteOffsetInResolveBin;
+				break;
+			}
+
+        }
+        if (tar < 0) {
+			gError = "call to undefined function '" + patches[i].targetFuncName + "'";
+			fclose(fout);
+			return -1;
+        }
+		fseek(fout, (off_t)patches[i].byteOffsetOfOffsetField, SEEK_SET);
+		fwrite(&tar, sizeof(int64_t), 1, fout);
+
+    }
+    fflush(fout);
+	int64_t mainOffset = -1;
+    for (int32_t j = 0;j < funcCt;j++) {
+		if (funcArray[j].funcName == "main") {
+			mainOffset = funcArray[j].byteOffsetInResolveBin;
+			break;
+		}
+    }
+    if (ferror(fout)) {
+        gError = "failed while wrting resolve.bin";
+		fclose(fout);
+        return -1;
+    }
+    fclose(fout);
+    if (mainOffset < 0) {
+        gError = "no 'main' function defined";
+    }
+    return mainOffset;
 }
 
 // PASS 0x2: EXECUTION (tokenization happens here)
