@@ -80,5 +80,6 @@ ipch/
 *.sln
 *.vcxproj
 *.vcxproj.filters
-*.vcxproj.userresolve.bin
+*.vcxproj.user
+resolve.bin
 session.tdbg
