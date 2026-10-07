@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 // ======================= TIME-TRAVEL DEBUGGER - SERVER TEMPLATE =======================
 
 // Pipeline this file implements, top to bottom:
@@ -109,6 +110,7 @@ public:
         // pushes the value on the stack if max limit is not reached yet.
         Node* n = new Node();
         n->data = val;
+        n->next = top;
         top = n;
         count++;
 
@@ -302,7 +304,37 @@ bool validateProgram(const char* sourcePath)
         gError = "source file exceeds the maximum allowed limit";
         return false;
     }
-
+    string line;
+    bool inFunc = false;
+    int32_t openAt = 0, lineNo = 0;
+    while (readSourceLine(in, line)) {
+        lineNo++;
+		string s = lowerStr(firstWord(line));
+        if (s == "func") {
+            if (inFunc) {
+				gError = "line " + to_string(lineNo) + ": nested function declaration is not allowed";
+				return false;
+            }
+            if(secondWord(line).empty()) {
+				gError = "line " + to_string(lineNo) + ": function name is missing";
+				return false;
+            }
+            inFunc = true;
+            openAt = lineNo;
+        }
+        else if (s == "func_end") {
+            if (!inFunc) {
+				gError = "line " + to_string(lineNo) + ": func_end without matching func";
+				return false;
+			}
+            inFunc = false;
+        }
+    }
+    if (inFunc) {
+        gError="function declaration at line " + to_string(openAt) + " is not closed with func_end";
+        return false;
+    }
+    return true;
 }
 
 // PASS 0x1: RESOLVE() -> resolve.bin
@@ -365,6 +397,9 @@ int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
                     return -1;
                 }
             }
+            funcArray[funcCt].funcName = name;
+			funcArray[funcCt].byteOffsetInResolveBin = pos;
+            funcCt++;
         }
         else if(s=="call"){
 			if (patchCt >= MAX_PATCHES) {
@@ -634,6 +669,37 @@ void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& ti
 }
 
 // PASS 0x3: SERIALIZE TIMELINE
+static void writeI32(FILE* f, int32_t x)
+{
+    fwrite(&x, sizeof(int32_t), 1, f);
+}
+static void writeStr(FILE* f, const string& s)
+{
+    writeI32(f, (int32_t)s.size());
+    if (!s.empty()) fwrite(s.data(), 1, s.size(), f);
+}
+void writeSnapshot(FILE* f, const Snapshot& s)
+{
+    writeI32(f, s.stackDepth);
+    for (int32_t i = 0; i < s.stackDepth; i++)
+    {
+        const Frame& fr = s.callStack[i];
+        writeStr(f, fr.func_name);
+        writeI32(f, fr.argc);
+        for (int32_t j = 0; j < fr.argc; j++)
+        {
+            writeStr(f, fr.argv[j].name);
+            writeI32(f, fr.argv[j].value);
+        }
+        writeI32(f, fr.returnLine);
+        writeI32(f, fr.localCount);
+        for (int32_t j = 0; j < fr.localCount; j++)
+        {
+            writeStr(f, fr.locals[j].name);
+            writeI32(f, fr.locals[j].value);
+        }
+    }
+}
 void writeTdbg(Timeline& timeline, const char* tdbgPath)
 {
     // placeholder for header
@@ -653,7 +719,21 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
 
 	int64_t* idx = new int64_t[steps > 0 ? steps : 1];
     int32_t i = 0;
- 
+    for (TimelineNode* n = timeline.begin(); n != nullptr && i < steps; n = n->next)
+    {
+        idx[i++] = (int64_t)ftell(f);
+        writeSnapshot(f, *n->data);
+    }
+    h.indexOffset = (int64_t)ftell(f);
+    if (steps > 0) fwrite(idx, sizeof(int64_t), (size_t)steps, f);
+
+    fseek(f, (long)0, SEEK_SET);
+    writeHeader(f, h);
+
+    delete[] idx;
+    bool ok = (fflush(f) == 0) && !ferror(f);
+    fclose(f);
+    if (!ok) gError = "failed while writing session.tdbg";
 }
 // main section
 int32_t main()
@@ -661,16 +741,28 @@ int32_t main()
 
     if (!validateProgram("source.bin"))
     {
-        // send an error response instead of a .tdbg file
+		sendError(gError);
         return 1;
     }
 
     int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
+    if (mainOffset < 0) {
+		sendError(gError);
+		return 1;
+    }
 
     Timeline timeline;
     executeProgram("resolve.bin", mainOffset, timeline);
-
+    if (!gError.empty())
+    {
+        sendError(gError);
+        return 1;
+    }
     writeTdbg(timeline, "session.tdbg");
-
+    if (!gError.empty()) 
+    {
+        sendError(gError);
+        return 1;
+    }
     return 0;
 }
