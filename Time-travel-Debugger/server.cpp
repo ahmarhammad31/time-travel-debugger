@@ -384,7 +384,7 @@ int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
     for (int32_t i = 0;i < patchCt;i++) {
         int64_t tar = -1;
         for (int32_t j = 0;j < funcCt;j++) {
-			if (funcArray[j].funcName == patches[i].targetFuncName]) {
+			if (funcArray[j].funcName == patches[i].targetFuncName) {
 				tar = funcArray[j].byteOffsetInResolveBin;
 				break;
 			}
@@ -437,10 +437,35 @@ int32_t tokenizeLine(const string& line, Token tokens[], int32_t maxTokens)
     // instruction set = [func, func_end, call, set, add, sub, mul and div]
     // next word is identifier like name of a function, variable name
     // after identifier all are the params/arg, space separated
+	int32_t count = 0;
+	size_t i = 0, n = line.size();
+    while (i < n && count < maxTokens) {
+		while (i < n && isspace((unsigned char)line[i]))i++;
+        if (i >= n)break;
+		size_t s = i;
+		while (i < n && !isspace((unsigned char)line[i]))i++;
+		string w = line.substr(s, i - s);
+		if (count == 0) {
+			tokens[count].type = KEYWORD;
+			w = lowerStr(w);
+		}
+		else if (count == 1) {
+			tokens[count].type = IDENTIFIER;
+		}
+		else {
+			tokens[count].type = PARAM;
+        }
+        tokens[count].text = w;
+        count++;
+    }
+    return count;
 }
 Snapshot* buildSnapshot(Stack<Frame>& callStack)
 {
     // build the snapshot based on the callStack given
+	Snapshot* s = new Snapshot();
+	s->stackDepth = callStack.snapshot_into(s->callStack,MAX_STACK_DEPTH);
+    return s;
 }
 void executeProgram(const char* resolveBinPath, int64_t mainOffset, Timeline& timeline)
 {
