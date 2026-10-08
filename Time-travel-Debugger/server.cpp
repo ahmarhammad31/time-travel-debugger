@@ -8,17 +8,6 @@
 //   3. Pass 0X2   -- execute resolve.bin: tokenize ONE line at a time, update the call stack, take a snapshot -> Timeline
 //   4. Pass 0X3   -- serialize Timeline -> session.tdbg(header + snapshot records + dense index)
 
-#ifndef _WIN32
-#define _FILE_OFFSET_BITS 64 
-#endif
-
-#ifndef _WIN32
-#define fseek64(f, off, whence) _fseeki64((f),(__int64)(off),(whence))
-#define ftell64(f) ((int64_t)_ftelli64(f))
-#else
-#define fseek64(f,off,whence) fseeko((f),(off_t)(off),(whence))
-#define ftell64(f) ((int64_t)ftello(f))
-#endif
 
 #include <iostream>
 #include <string>
@@ -68,10 +57,11 @@ static string wordAt(const string& line, int32_t index) {
     }
     return "";
 }
-static bool isNumber(const string& s) {
+bool isNumber(const string& s) {
 	if (s.empty())return false;
 	size_t i = 0;
 	if (s[0] == '-' || s[0] == '+')i++;
+	if (i >= s.size())return false;
 	for (; i < s.size();i++) {
 		if (!isdigit((unsigned char)s[i]))return false;
 	}
@@ -271,7 +261,7 @@ bool readSourceLine(ifstream& in, string& out)
         }
         size_t s = 0, e = line.size();
         while (s < e && isspace((unsigned char)line[s])) s++;
-        while (e < s && isspace((unsigned char)line[e - 1]))e--;
+        while (e > s && isspace((unsigned char)line[e - 1]))e--;
         line = line.substr(s, e - s);
         if (line.empty())continue;
         if (line.compare(0, 2, "//") == 0)continue;
@@ -357,6 +347,7 @@ int64_t readResolveRecord(FILE* f, string& outText)
 	int32_t size;
 	if (fread(&offsetField, sizeof(int64_t), 1, f) != 1)return -1;
 	if (fread(&size, sizeof(int32_t), 1, f) != 1)return -1;
+	if (size < 0 || (uint64_t)size > MAX_SOURCE_BYTES)return -1;
 	outText.resize((size_t)size);
 	if (size > 0 && fread(&outText[0], 1, (size_t)size, f) != (size_t)size)return -1;
     return offsetField;
@@ -430,7 +421,7 @@ int64_t resolveProgram(const char* sourcePath, const char* resolveBinPath)
 			fclose(fout);
 			return -1;
         }
-		fseek(fout, (off_t)patches[i].byteOffsetOfOffsetField, SEEK_SET);
+		fseek(fout, (long)patches[i].byteOffsetOfOffsetField, SEEK_SET);
 		fwrite(&tar, sizeof(int64_t), 1, fout);
 
     }
