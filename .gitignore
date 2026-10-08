@@ -84,3 +84,5 @@ ipch/
 resolve.bin
 session.tdbg
 .vscode
+.vscode/
+
