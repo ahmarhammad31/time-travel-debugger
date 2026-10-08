@@ -83,3 +83,4 @@ ipch/
 *.vcxproj.user
 resolve.bin
 session.tdbg
+.vscode
