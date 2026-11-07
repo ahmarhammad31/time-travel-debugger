@@ -86,3 +86,9 @@ session.tdbg
 .vscode
 .vscode/
 
+source.bin
+ttdb_last.tdbg
+ttdb_new.tdbg
+Time-travel-Debugger/server
+Time-travel-Debugger/client
+Time-travel-Debugger/load_balancer
