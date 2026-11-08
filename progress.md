@@ -10,3 +10,6 @@ implemented the whole till pass 0x2.
 implemented pass 0x3 as well.
 one day left in deadline, i have almost done the work but there are some errors in my code(mostly logical)
 i will do all the testing tomorrow (thursday.) Dated: 7-10-2026.
+
+started implementing phase 2 after mids
+uploaded files, and try building client.cpp
