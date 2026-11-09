@@ -15,6 +15,8 @@
 #include <fstream>
 #include<unistd.h>
 #include<sys/socket.h>
+#include<netinet/in.h>
+#include"helper.h"
 #include <cstdint>
 #include <cstdio>
 

@@ -8,57 +8,22 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-const int32_t MAX_VARS_PER_FRAME = 16;
-const int32_t MAX_STACK_DEPTH = 64;
-const int32_t IO_BUFFER_SIZE = 64 * 1024;
-const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024;
-const int32_t CLIENT_TIMEOUT_SEC = 30;
-const int32_t TTDB_VERSION = 1;
-const int32_t TTDB_HEADER_SIZE = 20;
-const uint8_t STATUS_OK = 0;
-const uint8_t STATUS_ERROR = 1;
+// Helper.h should contain the structs, functions, constants, etc. that are used more than one time in the project. For example, the structs that are used in both server and client, the constants that are used in all three files.
 
-struct Variable
-{
-    string name;
-    int32_t value = 0;
-};
-
-struct Frame
-{
-    string func_name;
-    int32_t argc = 0;
-    Variable argv[MAX_VARS_PER_FRAME];
-    int32_t returnLine = -1;
-    Variable locals[MAX_VARS_PER_FRAME];
-    int32_t localCount = 0;
-};
-
-struct Snapshot
-{
-    Frame callStack[MAX_STACK_DEPTH];
-    int32_t stackDepth = 0;
-};
-
-struct TTDBHeader
-{
-    char magic[4];
-    int32_t version;
-    int32_t stepCount;
-    int64_t indexOffset;
-};
-
+// resolve.bin - bookkeeping
 struct FuncEntry
 {
-    string funcName;
-    int64_t byteOffsetInResolveBin;
+    std::string funcName;
+    int64_t byteOffsetInResolveBin; // where this function's FUNC header record sits
 };
-
 struct PendingPatch
 {
-    int64_t byteOffsetOfOffsetField;
-    string targetFuncName;
+    int64_t byteOffsetOfOffsetField; // where in resolve.bin to seek back and overwrite
+    std::string targetFuncName;
 };
+
+const uint8_t STATUS_OK = 0;
+const uint8_t STATUS_ERROR = 1;
 
 struct Crc32
 {
@@ -152,7 +117,7 @@ inline bool sendAll(int sock, const char *data, size_t n)
     return true;
 }
 
-inline bool sendError(int sock, const string &msg)
+inline bool sendError(int sock, const std::string &msg)
 {
     char status = (char)STATUS_ERROR;
     Crc32 crc;
@@ -175,7 +140,8 @@ inline bool sendFramedFile(int sock, uint8_t status, const char *path)
     crc.add(&statusByte, 1);
     bool ok = sendAll(sock, &statusByte, 1);
 
-    char buffer[IO_BUFFER_SIZE];
+    const int BUFFER_SIZE = 64 * 1024;
+    char buffer[BUFFER_SIZE];
     while (ok)
     {
         size_t n = fread(buffer, 1, sizeof(buffer), f);
