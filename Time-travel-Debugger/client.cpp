@@ -29,6 +29,8 @@
 using namespace std;
 
 // ---- Constants ----
+const char *TDBG_TMP = "ttdb_new.tdbg";
+const int MAX_STRING_SIZE = 1024 * 1024;
 const char *PROGRAM_NAME = "ttdb";
 const char *PROMPT = "ttdb> ";
 const int TTDB_VERSION = 1;
