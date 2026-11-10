@@ -17,3 +17,4 @@ update helper
 
 update sever by adding function 
 updating server's main
+updating load_balancer
