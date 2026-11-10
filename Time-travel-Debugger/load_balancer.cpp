@@ -135,7 +135,7 @@ struct ClientInfo
 // The queue is used by two threads, so every use of it must be inside queueMutex.
 Queue<ClientInfo> pendingClients;
 mutex queueMutex;
-sig_atomic_t flag = 1;
+volatile sig_atomic_t flag = 1;
 
 // ---- Basic socket helpers ----
 
