@@ -13,3 +13,7 @@ i will do all the testing tomorrow (thursday.) Dated: 7-10-2026.
 
 started implementing phase 2 after mids
 uploaded files, and try building client.cpp
+update helper
+
+update sever by adding function 
+updating server's main
