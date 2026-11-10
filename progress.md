@@ -18,3 +18,5 @@ update helper
 update sever by adding function 
 updating server's main
 updating load_balancer
+updated client.cpp
+testing does the code works 
