@@ -32,6 +32,7 @@ const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024; // sanity cap on the decl
 const int32_t IO_BUFFER_SIZE = 64 * 1024;                  // fixed buffer for streaming to/from disk
 const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
 const int32_t MAX_STEPS = 10000;
+const int32_t LISTEN_BACKLOG = 16;
 
 //ERROR REPORT
 string gError;
@@ -229,18 +230,6 @@ void writeHeader(FILE* f, const TTDBHeader& h)
 
     // placeholder for other two data members
 }
-
-// resolve.bin - bookkeeping
-struct FuncEntry
-{
-    string funcName;
-    int64_t byteOffsetInResolveBin; // where this function's FUNC header record sits
-};
-struct PendingPatch
-{
-    int64_t byteOffsetOfOffsetField; // where in resolve.bin to seek back and overwrite
-    string targetFuncName;
-};
 
 
 
@@ -730,34 +719,158 @@ void writeTdbg(Timeline& timeline, const char* tdbgPath)
     if (!ok) gError = "failed while writing session.tdbg";
 }
 // main section
-int32_t main()
+bool receiveSource(int sock, const char *path)
 {
+    FILE *f = fopen(path, "wb");
+    if (!f)
+    {
+        gError = string("cannot create ") + path;
+        return false;
+    }
+    TrailerChecker tc;
+    static char in[IO_BUFFER_SIZE];
+    static char out[IO_BUFFER_SIZE + 4];
+    bool gotStatus = false, tooBig = false, recvFail = false;
+    uint64_t bodyBytes = 0;
+    while (true)
+    {
+        ssize_t n = recv(sock, in, sizeof(in), 0);
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            recvFail = true;
+            break;
+        }
+        if (n == 0)
+            break;
+        size_t rel = tc.feed(in, (size_t)n, out);
+        size_t off = 0;
+        if (rel > 0 && !gotStatus)
+        {
+            gotStatus = true;
+            off = 1;
+        }
+        size_t len = rel - off;
+        if (len > 0)
+        {
+            bodyBytes += len;
+            if (bodyBytes > MAX_SOURCE_BYTES)
+                tooBig = true;
+            if (!tooBig)
+                fwrite(out + off, 1, len, f);
+        }
+    }
+    fclose(f);
+    if (recvFail)
+    {
+        gError = "upload interrupted or timed out";
+        return false;
+    }
+    if (!tc.verify())
+    {
+        gError = "upload checksum mismatch";
+        return false;
+    }
+    if (tooBig)
+    {
+        gError = "source file exceeds the maximum allowed limit";
+        return false;
+    }
+    return true;
+}
 
+void handleClient(int cs)
+{
+    gError.clear();
+    timeval tv;
+    tv.tv_sec = SOCKET_TIMEOUT_SEC;
+    tv.tv_usec = 0;
+    setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(cs, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    if (!receiveSource(cs, "source.bin"))
+    {
+        sendError(cs, gError);
+        return;
+    }
     if (!validateProgram("source.bin"))
     {
-		sendError(gError);
-        return 1;
+        sendError(cs, gError);
+        return;
     }
-
     int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
-    if (mainOffset < 0) {
-		sendError(gError);
-		return 1;
+    if (mainOffset < 0)
+    {
+        sendError(cs, gError);
+        return;
     }
-
     Timeline timeline;
     executeProgram("resolve.bin", mainOffset, timeline);
     if (!gError.empty())
     {
-        sendError(gError);
+        sendError(cs, gError);
+        return;
+    }
+    writeTdbg(timeline, "session.tdbg");
+    if (!gError.empty())
+    {
+        sendError(cs, gError);
+        return;
+    }
+    if (!sendFramedFile(cs, STATUS_OK, "session.tdbg"))
+        cerr << "failed to send session.tdbg to the client" << endl;
+}
+
+int createListenSocket(int port)
+{
+    int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0)
+    {
+        perror("socket");
+        exit(1);
+    }
+    int yes = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    a.sin_port = htons((uint16_t)port);
+    if (bind(s, (sockaddr *)&a, sizeof(a)) < 0)
+    {
+        perror("bind");
+        exit(1);
+    }
+    if (listen(s, LISTEN_BACKLOG) < 0)
+    {
+        perror("listen");
+        exit(1);
+    }
+    return s;
+}
+
+int main(int argc, char *argv[])
+{
+    int port = argc > 1 ? atoi(argv[1]) : 5001;
+    if (port <= 0 || port > 65535)
+    {
+        cerr << "usage: ./server <port>" << endl;
         return 1;
     }
-
-    writeTdbg(timeline, "session.tdbg");
-    if (!gError.empty()) 
+    int ls = createListenSocket(port);
+    cout << "server listening on port " << port << endl;
+    while (true)
     {
-        sendError(gError);
-        return 1;
+        int cs = accept(ls, nullptr, nullptr);
+        if (cs < 0)
+        {
+            if (errno != EINTR)
+                perror("accept");
+            continue;
+        }
+        handleClient(cs);
+        close(cs);
     }
     return 0;
 }
